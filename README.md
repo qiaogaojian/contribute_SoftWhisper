@@ -29,7 +29,7 @@ by simply starting the application and changing the directory under the option "
 ### Installation steps
 #### Windows
 
-Just click on SoftWhisper.bat. If any dependency is missing, you will be prompted to install it.
+Just click on `SoftWhisper.bat`. If any dependency is missing, you will be prompted to install it.
 If that fails, install the dependencies manually with the command:
 <br>
 `pip install -r requirements.txt`

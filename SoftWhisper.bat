@@ -1,1 +1,0 @@
-python SoftWhisper-CPU.py

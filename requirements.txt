@@ -1,0 +1,6 @@
+psutil
+pydub
+python-vlc
+pillow
+numpy
+requests

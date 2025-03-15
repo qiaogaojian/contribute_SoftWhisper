@@ -29,12 +29,18 @@ by simply starting the application and changing the directory under the option "
 ### Installation steps
 #### Windows
 
-Just click on `SoftWhisper.bat`. If any dependency is missing, you will be prompted to install it.
+First, install the VC runtime from Microsoft for example, at https://aka.ms/vs/17/release/vc_redist.x64.exe and ffmpeg from https://github.com/icedterminal/ffmpeg-installer/releases/download/7.0.0.20240429/FFmpeg_Essentials.msi.
+
+Next, just click on `SoftWhisper.bat`. If any dependency is missing, you will be prompted to install it.
 If that fails, install the dependencies manually with the command:
 <br>
 `pip install -r requirements.txt`
 
-## Linux
+#### Linux
+
+Linux users should get ffmpeg from their distribution. For example, if you are running Ubuntu, type:
+`sudo apt-get install ffmpeg` on command line, or run your preferred package manager.
+
 For now, convenience scripts are not available. 
 Install the dependencies with:
 <br>

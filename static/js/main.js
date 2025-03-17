@@ -70,11 +70,45 @@ function debugLog(message, type = 'info') {
 // 初始化 Socket.IO
 function initSocketIO() {
     debugLog('初始化 Socket.IO 连接...');
-    socket = io();
+    
+    // 确保使用正确的命名空间
+    const namespace = '/';
+    debugLog(`使用命名空间: ${namespace}`);
+    
+    // 添加连接选项
+    const options = {
+        reconnection: true,           // 启用重连
+        reconnectionAttempts: 10,     // 最大重连次数
+        reconnectionDelay: 1000,      // 重连延迟（毫秒）
+        reconnectionDelayMax: 5000,   // 最大重连延迟（毫秒）
+        timeout: 20000,               // 连接超时（毫秒）
+        autoConnect: true,            // 自动连接
+        transports: ['websocket', 'polling']  // 传输方式，优先使用 WebSocket
+    };
+    
+    debugLog(`Socket.IO 连接选项: ${JSON.stringify(options)}`);
+    socket = io(namespace, options);
     
     // 连接事件
     socket.on('connect', () => {
-        debugLog(`Socket.IO 已连接，Socket ID: ${socket.id}`);
+        debugLog(`Socket.IO 已连接，Socket ID: ${socket.id}, 命名空间: ${namespace}`);
+        
+        // 如果有当前任务ID，自动重新订阅
+        if (currentTaskId) {
+            debugLog(`连接后自动重新订阅任务: ${currentTaskId}`);
+            subscribeToTask(currentTaskId);
+        }
+    });
+    
+    // 连接错误事件
+    socket.on('connect_error', (error) => {
+        debugLog(`Socket.IO 连接错误: ${error.message}`, 'error');
+        
+        // 尝试使用不同的传输方式
+        if (socket.io.opts.transports.indexOf('polling') === -1) {
+            debugLog('尝试使用轮询方式重新连接...', 'warn');
+            socket.io.opts.transports = ['polling', 'websocket'];
+        }
     });
     
     // 断开连接事件
@@ -97,11 +131,12 @@ function initSocketIO() {
     
     socket.on('reconnect_failed', () => {
         debugLog('Socket.IO 重连失败，已达到最大重试次数', 'error');
+        updateStatus('无法连接到服务器，请刷新页面重试', 'danger');
     });
     
     // 错误事件
     socket.on('error', (error) => {
-        debugLog(`Socket.IO 错误: ${error}`, 'error');
+        debugLog(`Socket.IO 错误: ${JSON.stringify(error)}`, 'error');
     });
     
     // 进度更新事件
@@ -144,26 +179,95 @@ function initSocketIO() {
         }
     });
     
+    // 订阅确认事件
+    socket.on('subscription_confirmed', (data) => {
+        debugLog(`收到订阅确认: task_id=${data.task_id}`);
+        updateStatus('已连接到转录服务', 'info');
+    });
+    
+    // 添加通用消息事件监听器，用于调试
+    socket.onAny((eventName, ...args) => {
+        debugLog(`收到Socket.IO事件: ${eventName}, 数据: ${JSON.stringify(args)}`, 'debug');
+    });
+    
     debugLog('Socket.IO 事件监听器已设置');
 }
 
 // 订阅任务进度
 function subscribeToTask(taskId) {
-    debugLog(`订阅任务进度: task_id=${taskId}`);
-    if (!socket || !socket.connected) {
-        debugLog('Socket.IO 未连接，无法订阅任务', 'error');
+    debugLog(`准备订阅任务进度: task_id=${taskId}`);
+    
+    // 检查任务ID是否有效
+    if (!taskId) {
+        debugLog('无效的任务ID，无法订阅', 'error');
+        updateStatus('无效的任务ID', 'danger');
         return;
     }
     
-    socket.emit('subscribe_task', { task_id: taskId }, (response) => {
-        if (response && response.error) {
-            debugLog(`订阅任务失败: ${response.error}`, 'error');
-            updateStatus(`订阅任务失败: ${response.error}`, 'danger');
-        } else {
-            debugLog(`已成功订阅任务: ${taskId}`);
-            updateStatus('已连接到转录服务', 'info');
+    // 检查Socket是否已初始化
+    if (!socket) {
+        debugLog('Socket.IO 未初始化，正在初始化...', 'warn');
+        initSocketIO();
+        
+        // 等待连接建立后再订阅
+        setTimeout(() => {
+            if (socket && socket.connected) {
+                debugLog(`Socket.IO 已初始化并连接，现在订阅任务: ${taskId}`);
+                socket.emit('subscribe_task', { task_id: taskId });
+            } else {
+                debugLog('Socket.IO 初始化后仍未连接，无法订阅任务', 'error');
+                updateStatus('无法连接到服务器', 'danger');
+            }
+        }, 1000);
+        
+        return;
+    }
+    
+    // 检查Socket是否已连接
+    if (!socket.connected) {
+        debugLog('Socket.IO 未连接，等待连接后订阅...', 'warn');
+        
+        // 尝试重新连接
+        if (!socket.connecting) {
+            debugLog('尝试重新连接 Socket.IO...', 'warn');
+            socket.connect();
         }
-    });
+        
+        socket.once('connect', () => {
+            debugLog(`Socket.IO 已连接，现在订阅任务: ${taskId}`);
+            socket.emit('subscribe_task', { task_id: taskId });
+            debugLog(`订阅请求已发送: ${taskId}`);
+        });
+        return;
+    }
+    
+    // 直接发送订阅请求
+    debugLog(`Socket.IO 已连接，直接发送订阅请求: ${taskId}`);
+    
+    // 添加超时处理
+    let subscriptionConfirmed = false;
+    const subscriptionTimeout = setTimeout(() => {
+        if (!subscriptionConfirmed) {
+            debugLog(`订阅确认超时，重新发送订阅请求: ${taskId}`, 'warn');
+            socket.emit('subscribe_task', { task_id: taskId });
+        }
+    }, 5000);
+    
+    // 监听订阅确认
+    const confirmHandler = (data) => {
+        if (data.task_id === taskId) {
+            subscriptionConfirmed = true;
+            clearTimeout(subscriptionTimeout);
+            socket.off('subscription_confirmed', confirmHandler);
+            debugLog(`订阅已确认: ${taskId}`);
+        }
+    };
+    
+    socket.on('subscription_confirmed', confirmHandler);
+    
+    // 发送订阅请求
+    socket.emit('subscribe_task', { task_id: taskId });
+    debugLog(`订阅请求已发送: ${taskId}`);
 }
 
 // 取消订阅任务进度
@@ -413,16 +517,14 @@ function startTranscription() {
         if (data.success) {
             debugLog(`转录请求成功，新任务ID: ${data.task_id}`);
             
-            // 取消订阅旧任务
-            if (currentTaskId) {
-                debugLog(`取消订阅旧任务: ${currentTaskId}`);
-                unsubscribeFromTask(currentTaskId);
-            }
-            
-            // 更新当前任务ID并订阅
+            // 更新当前任务ID
             currentTaskId = data.task_id;
-            debugLog(`订阅新任务: ${currentTaskId}`);
-            subscribeToTask(currentTaskId);
+            
+            // 确保Socket.IO已连接
+            if (!socket || !socket.connected) {
+                debugLog('Socket.IO未连接，重新初始化...');
+                initSocketIO();
+            }
             
             isTranscribing = true;
             updateStatus('转录已开始', 'info');

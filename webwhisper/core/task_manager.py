@@ -214,6 +214,16 @@ class TaskManager:
             
             return task.get_result_dict()
     
+    def get_all_tasks(self):
+        """
+        获取所有任务
+        
+        Returns:
+            dict: 任务ID到任务对象的映射
+        """
+        with self.lock:
+            return self.tasks.copy()
+    
     def _clean_old_tasks(self):
         """
         清理旧任务，保持任务数量在限制内

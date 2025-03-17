@@ -1,0 +1,15 @@
+# 不能屏蔽log/目录！
+logs/
+venv/
+poetry.lock
+
+__pycache__/
+.idea
+nohup.out
+
+Xray-core/
+log
+*.log
+
+
+/models

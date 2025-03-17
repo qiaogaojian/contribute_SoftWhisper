@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebWhisper - 在线音视频转录</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
+</head>
+<body>
+    <div class="container-fluid">
+        <header class="bg-dark text-white p-3 mb-4">
+            <div class="container">
+                <h1 class="display-5">WebWhisper</h1>
+                <p class="lead">基于 Whisper.cpp 的在线音视频转录工具</p>
+            </div>
+        </header>
+
+        <div class="container">
+            <div class="row">
+                <!-- 左侧：媒体控制和文件上传 -->
+                <div class="col-md-4">
+                    <div class="card mb-4">
+                        <div class="card-header bg-primary text-white">
+                            <h5 class="card-title mb-0">媒体控制</h5>
+                        </div>
+                        <div class="card-body">
+                            <!-- 视频/音频播放器 -->
+                            <div id="media-player" class="mb-3">
+                                <div id="video-container" class="bg-dark text-white d-flex align-items-center justify-content-center mb-2" style="height: 200px;">
+                                    <p id="no-media-text">未加载媒体文件</p>
+                                    <video id="video-player" class="w-100 d-none" controls></video>
+                                    <audio id="audio-player" class="w-100 d-none" controls></audio>
+                                </div>
+                                
+                                <!-- 播放控制 -->
+                                <div class="d-flex justify-content-between mb-2">
+                                    <button id="play-btn" class="btn btn-sm btn-success" disabled>播放</button>
+                                    <button id="pause-btn" class="btn btn-sm btn-warning" disabled>暂停</button>
+                                    <button id="stop-btn" class="btn btn-sm btn-danger" disabled>停止</button>
+                                </div>
+                                
+                                <!-- 时间显示 -->
+                                <div class="text-center mb-2">
+                                    <span id="time-display">00:00:00 / 00:00:00</span>
+                                </div>
+                            </div>
+                            
+                            <!-- 文件上传 -->
+                            <div class="mb-3">
+                                <label for="file-upload" class="form-label">选择音频/视频文件</label>
+                                <input type="file" class="form-control" id="file-upload" accept=".wav,.mp3,.m4a,.flac,.ogg,.wma,.mp4,.mov,.avi,.mkv">
+                            </div>
+                            
+                            <div id="upload-info" class="alert alert-info d-none">
+                                <p id="upload-filename"></p>
+                            </div>
+                            
+                            <!-- 转录控制 -->
+                            <div class="d-grid gap-2">
+                                <button id="start-btn" class="btn btn-primary" disabled>开始转录</button>
+                                <button id="stop-btn" class="btn btn-danger" disabled>停止转录</button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 导出选项 -->
+                    <div class="card mb-4">
+                        <div class="card-header bg-success text-white">
+                            <h5 class="card-title mb-0">导出选项</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="d-grid gap-2">
+                                <button id="export-txt-btn" class="btn btn-outline-primary" disabled>导出文本</button>
+                                <button id="export-srt-btn" class="btn btn-outline-success" disabled>导出SRT字幕</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 右侧：设置和转录结果 -->
+                <div class="col-md-8">
+                    <!-- 状态和进度 -->
+                    <div class="card mb-4">
+                        <div class="card-header bg-info text-white">
+                            <h5 class="card-title mb-0">状态</h5>
+                        </div>
+                        <div class="card-body">
+                            <p id="status-message" class="mb-2">准备就绪</p>
+                            <div class="progress mb-3">
+                                <div id="progress-bar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%"></div>
+                            </div>
+                            
+                            <!-- 控制台输出 -->
+                            <div class="mb-3">
+                                <label for="console-output" class="form-label">控制台输出</label>
+                                <textarea id="console-output" class="form-control" rows="3" readonly></textarea>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 设置选项 -->
+                    <div class="card mb-4">
+                        <div class="card-header bg-secondary text-white">
+                            <h5 class="card-title mb-0">设置选项</h5>
+                        </div>
+                        <div class="card-body">
+                            <form id="settings-form">
+                                <div class="row mb-3">
+                                    <div class="col-md-6">
+                                        <label for="model-select" class="form-label">模型</label>
+                                        <select id="model-select" class="form-select">
+                                            <option value="tiny">tiny</option>
+                                            <option value="tiny.en">tiny.en</option>
+                                            <option value="base" selected>base</option>
+                                            <option value="base.en">base.en</option>
+                                            <option value="small">small</option>
+                                            <option value="small.en">small.en</option>
+                                            <option value="medium">medium</option>
+                                            <option value="medium.en">medium.en</option>
+                                            <option value="large">large</option>
+                                            <option value="large-v2">large-v2</option>
+                                            <option value="large-v3">large-v3</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label for="task-select" class="form-label">任务</label>
+                                        <select id="task-select" class="form-select">
+                                            <option value="transcribe" selected>转录</option>
+                                            <option value="translate">翻译为英文</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                
+                                <div class="row mb-3">
+                                    <div class="col-md-6">
+                                        <label for="language-input" class="form-label">语言</label>
+                                        <input type="text" class="form-control" id="language-input" value="auto" placeholder="auto表示自动检测">
+                                        <div class="form-text">使用'auto'自动检测语言</div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label for="beam-size" class="form-label">Beam Size</label>
+                                        <input type="number" class="form-control" id="beam-size" min="1" max="10" value="{{ config.beam_size }}">
+                                    </div>
+                                </div>
+                                
+                                <div class="row mb-3">
+                                    <div class="col-md-6">
+                                        <label for="start-time" class="form-label">开始时间 [hh:mm:ss]</label>
+                                        <input type="text" class="form-control" id="start-time" value="00:00:00">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label for="end-time" class="form-label">结束时间 [hh:mm:ss]</label>
+                                        <input type="text" class="form-control" id="end-time" value="" placeholder="留空表示全部">
+                                        <div class="form-text">留空表示处理全部时长</div>
+                                    </div>
+                                </div>
+                                
+                                <div class="mb-3">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" id="generate-srt">
+                                        <label class="form-check-label" for="generate-srt">生成SRT字幕</label>
+                                    </div>
+                                </div>
+                                
+                                <div class="mb-3">
+                                    <label for="whisper-path" class="form-label">Whisper.cpp 可执行文件路径</label>
+                                    <input type="text" class="form-control" id="whisper-path" value="{{ config.WHISPER_CPP_PATH }}">
+                                </div>
+                                
+                                <div class="d-grid">
+                                    <button type="button" id="save-config-btn" class="btn btn-outline-secondary">保存配置</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                    
+                    <!-- 转录结果 -->
+                    <div class="card">
+                        <div class="card-header bg-dark text-white">
+                            <h5 class="card-title mb-0">转录结果</h5>
+                        </div>
+                        <div class="card-body">
+                            <textarea id="transcription-result" class="form-control" rows="10" readonly></textarea>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <footer class="bg-dark text-white text-center p-3 mt-4">
+            <p>WebWhisper &copy; 2023 - 基于 Whisper.cpp 的在线音视频转录工具</p>
+        </footer>
+    </div>
+
+    <!-- JavaScript 库 -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/socket.io/client-dist/socket.io.min.js"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html> 

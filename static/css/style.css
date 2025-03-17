@@ -1,0 +1,109 @@
+/* WebWhisper 样式 */
+
+body {
+    background-color: #f8f9fa;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+/* 媒体播放器样式 */
+#video-container {
+    border-radius: 5px;
+    overflow: hidden;
+    position: relative;
+}
+
+#no-media-text {
+    text-align: center;
+    color: #adb5bd;
+}
+
+/* 进度条样式 */
+.progress {
+    height: 20px;
+    border-radius: 5px;
+}
+
+/* 文本区域样式 */
+textarea {
+    resize: vertical;
+    font-family: 'Courier New', Courier, monospace;
+}
+
+#console-output {
+    background-color: #212529;
+    color: #20c997;
+    font-size: 0.85rem;
+}
+
+#transcription-result {
+    min-height: 200px;
+    font-size: 0.95rem;
+    line-height: 1.5;
+}
+
+/* 卡片样式 */
+.card {
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    border: none;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.card-header {
+    font-weight: bold;
+}
+
+/* 按钮样式 */
+.btn {
+    border-radius: 5px;
+    font-weight: 500;
+}
+
+/* 状态消息样式 */
+#status-message {
+    font-weight: 500;
+}
+
+/* 响应式调整 */
+@media (max-width: 768px) {
+    #video-container {
+        height: 150px !important;
+    }
+    
+    .card-body {
+        padding: 1rem;
+    }
+    
+    .container {
+        padding: 0 10px;
+    }
+}
+
+/* 动画效果 */
+.btn:hover {
+    transform: translateY(-2px);
+    transition: transform 0.2s;
+}
+
+/* 上传信息样式 */
+#upload-info {
+    border-left: 4px solid #0d6efd;
+}
+
+/* 时间显示样式 */
+#time-display {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.9rem;
+    font-weight: bold;
+}
+
+/* 表单元素样式 */
+.form-control:focus, .form-select:focus {
+    border-color: #0d6efd;
+    box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+}
+
+/* 页脚样式 */
+footer {
+    margin-top: 2rem;
+} 

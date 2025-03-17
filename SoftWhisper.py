@@ -26,7 +26,7 @@ def get_default_whisper_cpp_path():
         # Default Windows path: a directory; we'll later append the executable name.
         return os.path.join(program_dir, "Whisper_win-x64")
     else:
-        return os.path.join(program_dir, "Whisper_lin-x64")
+        return os.path.join(program_dir, "Whisper_linux-x64")
 
 # Allowed model filenames for automatic download.
 ALLOWED_MODELS = [

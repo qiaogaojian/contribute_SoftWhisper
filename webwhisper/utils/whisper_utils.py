@@ -66,7 +66,9 @@ def build_whisper_command(model_path, audio_path, options):
     
     # 确保使用绝对路径
     if not os.path.isabs(executable):
-        executable = os.path.join(os.path.dirname(os.path.abspath(__file__)), executable)
+        # 使用项目根目录作为基准，而不是当前模块目录
+        base_dir = Path(__file__).resolve().parent.parent.parent
+        executable = os.path.join(base_dir, executable)
     
     # 如果用户选择了目录，猜测实际的二进制文件名
     if os.path.isdir(executable):

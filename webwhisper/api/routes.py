@@ -73,7 +73,7 @@ def start_transcription():
         'start_time': data.get('start_time', '00:00:00'),
         'end_time': data.get('end_time', ''),
         'generate_srt': data.get('generate_srt', False),
-        'whisper_executable': data.get('whisper_path', config.get('whisper_executable'))
+        'whisper_executable': config.get('whisper_executable')
     }
     
     # 创建转录任务

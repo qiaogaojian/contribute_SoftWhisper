@@ -41,7 +41,9 @@ class Transcriber:
         
         # 确保使用绝对路径
         if not os.path.isabs(whisper_path):
-            whisper_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), whisper_path)
+            # 使用项目根目录作为基准，而不是当前模块目录
+            base_dir = Path(__file__).resolve().parent.parent.parent
+            whisper_path = os.path.join(base_dir, whisper_path)
         
         # 如果用户选择了目录，猜测实际的二进制文件名
         if os.path.isdir(whisper_path):

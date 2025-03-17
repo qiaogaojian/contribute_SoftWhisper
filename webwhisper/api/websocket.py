@@ -5,7 +5,9 @@ WebWhisper WebSocket 模块
 
 import threading
 import time
+import queue
 from flask_socketio import Namespace, emit
+from flask import request
 
 from webwhisper.utils.logging_utils import logger
 from webwhisper.core.task_manager import task_manager
@@ -26,9 +28,14 @@ class WebWhisperNamespace(Namespace):
         self.clients = {}  # 客户端会话字典
         self.progress_threads = {}  # 进度线程字典
     
-    def on_connect(self):
-        """处理客户端连接"""
-        client_id = self.request.sid
+    def on_connect(self, auth=None):
+        """
+        处理客户端连接
+        
+        Args:
+            auth: 认证信息（Flask-SocketIO 4.x 版本需要）
+        """
+        client_id = request.sid
         self.clients[client_id] = {
             'connected_at': time.time(),
             'task_id': None
@@ -37,7 +44,7 @@ class WebWhisperNamespace(Namespace):
     
     def on_disconnect(self):
         """处理客户端断开连接"""
-        client_id = self.request.sid
+        client_id = request.sid
         if client_id in self.clients:
             # 停止进度线程
             if client_id in self.progress_threads:
@@ -56,7 +63,7 @@ class WebWhisperNamespace(Namespace):
         Args:
             data: 包含任务ID的字典
         """
-        client_id = self.request.sid
+        client_id = request.sid
         task_id = data.get('task_id')
         
         if not task_id:
@@ -122,7 +129,7 @@ class WebWhisperNamespace(Namespace):
         Args:
             data: 包含任务ID的字典
         """
-        client_id = self.request.sid
+        client_id = request.sid
         
         # 停止进度线程
         if client_id in self.progress_threads:

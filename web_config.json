@@ -1,0 +1,11 @@
+{
+    "beam_size": 5,
+    "whisper_executable": "Whisper_linux-x64/whisper-cli",
+    "upload_folder": "uploads",
+    "temp_folder": "temp",
+    "models_folder": "models/whisper",
+    "max_upload_size": 524288000,
+    "host": "0.0.0.0",
+    "port": 5000,
+    "debug": true
+} 

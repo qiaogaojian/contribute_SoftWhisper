@@ -9,6 +9,8 @@ import logging
 from pathlib import Path
 from datetime import datetime
 
+from pycore.utils.file_utils import FileUtils
+
 # 日志级别映射
 LOG_LEVELS = {
     'debug': logging.DEBUG,
@@ -23,7 +25,7 @@ LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
 
 # 日志目录
-LOG_DIR = Path(__file__).resolve().parent.parent.parent / 'logs'
+LOG_DIR = FileUtils.get_project_path('logs')
 
 
 def setup_logger(name, level='info', log_file=None, console=True):
@@ -81,7 +83,7 @@ def get_default_logger(name='webwhisper', level='info'):
     os.makedirs(LOG_DIR, exist_ok=True)
     
     # 创建日志文件路径
-    log_file = LOG_DIR / f"{name}_{datetime.now().strftime('%Y%m%d')}.log"
+    log_file = os.path.join(LOG_DIR, f"{name}_{datetime.now().strftime('%Y%m%d')}.log")
     
     return setup_logger(name, level, log_file)
 

@@ -11,6 +11,7 @@ from webwhisper.utils.whisper_utils import transcribe_audio
 from webwhisper.utils.subtitle_utils import whisper_to_srt, segments_to_srt, save_srt
 from webwhisper.core.task_manager import task_manager
 from webwhisper.config import config
+from pycore.utils.file_utils import FileUtils
 
 
 class Transcriber:
@@ -41,9 +42,7 @@ class Transcriber:
         
         # 确保使用绝对路径
         if not os.path.isabs(whisper_path):
-            # 使用项目根目录作为基准，而不是当前模块目录
-            base_dir = Path(__file__).resolve().parent.parent.parent
-            whisper_path = os.path.join(base_dir, whisper_path)
+            whisper_path = FileUtils.get_project_path(whisper_path)
         
         # 如果用户选择了目录，猜测实际的二进制文件名
         if os.path.isdir(whisper_path):

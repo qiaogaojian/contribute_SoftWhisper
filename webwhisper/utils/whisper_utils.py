@@ -14,6 +14,7 @@ import psutil
 
 from webwhisper.utils.logging_utils import logger
 from webwhisper.config import config
+from pycore.utils.file_utils import FileUtils
 
 
 def convert_audio_to_wav(file_path, temp_dir=None):
@@ -32,7 +33,7 @@ def convert_audio_to_wav(file_path, temp_dir=None):
         
         # 创建临时文件
         if temp_dir is None:
-            temp_dir = config.get('temp_folder')
+            temp_dir = FileUtils.get_project_path(config.get('temp_folder'))
         
         os.makedirs(temp_dir, exist_ok=True)
         temp_wav_path = os.path.join(temp_dir, f"whisper_temp_{int(time.time())}.wav")
@@ -47,6 +48,25 @@ def convert_audio_to_wav(file_path, temp_dir=None):
     except Exception as e:
         logger.error(f"音频转换失败: {str(e)}")
         raise RuntimeError(f"音频转换失败: {str(e)}")
+
+
+def cleanup_temp_file(temp_file_path):
+    """
+    清理临时文件
+    
+    Args:
+        temp_file_path: 临时文件路径
+    """
+    if not config.get('cleanup_temp_files'):
+        logger.debug(f"根据配置保留临时文件: {temp_file_path}")
+        return
+        
+    if temp_file_path and os.path.exists(temp_file_path):
+        try:
+            os.remove(temp_file_path)
+            logger.debug(f"已删除临时文件: {temp_file_path}")
+        except Exception as e:
+            logger.warning(f"无法删除临时文件 {temp_file_path}: {str(e)}")
 
 
 def build_whisper_command(model_path, audio_path, options):
@@ -65,10 +85,7 @@ def build_whisper_command(model_path, audio_path, options):
     executable = options.get('whisper_executable', config.get('whisper_executable'))
     
     # 确保使用绝对路径
-    if not os.path.isabs(executable):
-        # 使用项目根目录作为基准，而不是当前模块目录
-        base_dir = Path(__file__).resolve().parent.parent.parent
-        executable = os.path.join(base_dir, executable)
+    executable = FileUtils.get_project_path(executable)
     
     # 如果用户选择了目录，猜测实际的二进制文件名
     if os.path.isdir(executable):
@@ -81,11 +98,11 @@ def build_whisper_command(model_path, audio_path, options):
     if not os.path.exists(executable):
         raise FileNotFoundError(f"Whisper 可执行文件不存在: {executable}")
     
-    # 构建命令
+    # 构建命令，确保所有路径都是绝对路径
     cmd = [
         executable,
-        "-m", model_path,
-        "-f", audio_path,
+        "-m", FileUtils.get_project_path(model_path),
+        "-f", FileUtils.get_project_path(audio_path),
         "-bs", str(options.get('beam_size', 5)),
         "-pp",  # 实时进度
         "-l", options.get('language', 'auto')
@@ -348,12 +365,12 @@ def transcribe_audio(file_path, options, progress_callback=None, stop_event=None
     temp_wav_path = None
     try:
         # 转换音频为 WAV 格式
-        temp_wav_path = convert_audio_to_wav(file_path, config.get('temp_folder'))
+        temp_wav_path = convert_audio_to_wav(file_path, FileUtils.get_project_path(config.get('temp_folder')))
         
         # 获取模型路径
         model_name = options.get('model_name', 'base')
         model_path = os.path.join(
-            config.get('models_folder'),
+            FileUtils.get_project_path(config.get('models_folder')),
             f"ggml-{model_name}.bin"
         )
         
@@ -391,10 +408,5 @@ def transcribe_audio(file_path, options, progress_callback=None, stop_event=None
         }
     
     finally:
-        # 清理临时文件
-        if temp_wav_path and os.path.exists(temp_wav_path):
-            try:
-                os.remove(temp_wav_path)
-                logger.debug(f"已删除临时文件: {temp_wav_path}")
-            except:
-                logger.warning(f"无法删除临时文件: {temp_wav_path}") 
+        # 根据配置清理临时文件
+        cleanup_temp_file(temp_wav_path) 

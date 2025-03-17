@@ -10,8 +10,9 @@ import queue
 from collections import OrderedDict
 
 from webwhisper.utils.logging_utils import logger
-from webwhisper.utils.whisper_utils import transcribe_audio
+from webwhisper.utils.whisper_utils import transcribe_audio, cleanup_temp_file
 from webwhisper.models.task import TranscriptionTask, TaskStatus
+from webwhisper.config import config
 
 
 class TaskManager:
@@ -96,58 +97,40 @@ class TaskManager:
     
     def _run_transcription(self, task_id):
         """
-        执行转录任务
+        运行转录任务
         
         Args:
             task_id: 任务ID
         """
-        with self.lock:
-            if task_id not in self.tasks:
-                logger.error(f"任务不存在: {task_id}")
-                return
-            
-            task = self.tasks[task_id]
-        
         try:
-            # 定义进度回调函数
-            def progress_callback(progress, message):
-                logger.debug(f"进度更新: {progress}%, 消息: {message}")
-                task.update_progress(progress, message)
+            with self.lock:
+                if task_id not in self.tasks:
+                    logger.error(f"任务不存在: {task_id}")
+                    return
+                
+                task = self.tasks[task_id]
+                task.start()
             
             # 执行转录
-            logger.info(f"开始转录任务: {task_id}, 文件: {task.file_path}")
             result = transcribe_audio(
-                file_path=task.file_path,
-                options=task.options,
-                progress_callback=progress_callback,
+                task.file_path,
+                task.options,
+                progress_callback=task.update_progress,
                 stop_event=task.stop_event
             )
             
             # 处理结果
             with self.lock:
-                if task_id not in self.tasks:
-                    return
-                
-                task = self.tasks[task_id]
-                
-                if task.stop_event.is_set():
-                    task.status = TaskStatus.CANCELLED
-                    logger.info(f"任务已取消: {task_id}")
-                elif result.get('cancelled', False):
-                    task.fail(result.get('text', '转录失败'))
-                    logger.error(f"任务失败: {task_id}, 错误: {task.error}")
-                else:
-                    task.complete(result)
-                    logger.info(f"任务完成: {task_id}")
+                if task_id in self.tasks:
+                    if result.get('cancelled'):
+                        self.tasks[task_id].cancel()
+                    else:
+                        self.tasks[task_id].complete(result)
             
-            # 清理临时文件
+            # 根据配置清理临时文件
             temp_audio_path = result.get('temp_audio_path')
-            if temp_audio_path and os.path.exists(temp_audio_path):
-                try:
-                    os.remove(temp_audio_path)
-                    logger.debug(f"已删除临时文件: {temp_audio_path}")
-                except:
-                    logger.warning(f"无法删除临时文件: {temp_audio_path}")
+            if temp_audio_path:
+                cleanup_temp_file(temp_audio_path)
         
         except Exception as e:
             logger.error(f"转录任务异常: {task_id}, 错误: {str(e)}")

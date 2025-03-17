@@ -2,8 +2,14 @@
 WebWhisper 应用入口模块
 初始化 Flask 应用
 """
-
 import os
+import logging
+
+from pycore.base import Core
+from pycore.logger import Logger
+from pycore.utils.tools import Tools
+from pycore.utils.file_utils import FileUtils
+
 from flask import Flask, render_template
 from flask_socketio import SocketIO
 
@@ -76,7 +82,8 @@ def main():
     os.makedirs(config.get('models_folder'), exist_ok=True)
     
     # 检查模板目录是否存在
-    if not os.path.exists("templates"):
+    templates_dir = FileUtils.get_project_path("templates")
+    if not os.path.exists(templates_dir):
         logger.warning("模板目录不存在，将使用默认模板")
     
     # 启动服务器
@@ -92,4 +99,9 @@ def main():
 
 
 if __name__ == '__main__':
+    args = Tools.parse_args()
+    core = Core()
+    core.init(env=args.env)
+    Logger.instance().info('********************************* Web Whisper *********************************')
+
     main() 

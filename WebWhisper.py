@@ -17,6 +17,7 @@ from flask import Flask, render_template, request, jsonify, send_from_directory,
 from flask_socketio import SocketIO
 import psutil
 from werkzeug.utils import secure_filename
+from pycore.utils.file_utils import FileUtils
 
 # 调试辅助函数
 def debug_print(msg):
@@ -24,14 +25,13 @@ def debug_print(msg):
     sys.__stdout__.flush()
 
 def get_default_whisper_cpp_path():
-    program_dir = os.path.dirname(os.path.abspath(__file__))
     if os.name == "nt":
         # Windows 路径
-        whisper_dir = os.path.join(program_dir, "Whisper_win-x64")
+        whisper_dir = FileUtils.get_project_path("Whisper_win-x64")
         whisper_exe = os.path.join(whisper_dir, "whisper-cli.exe")
     else:
         # Linux 路径
-        whisper_dir = os.path.join(program_dir, "Whisper_linux-x64")
+        whisper_dir = FileUtils.get_project_path("Whisper_linux-x64")
         whisper_exe = os.path.join(whisper_dir, "whisper-cli")
     
     # 检查可执行文件是否存在
@@ -121,7 +121,7 @@ except ImportError:
         """
         debug_print(f"转录文件: {file_path}")
         model_name = options.get('model_name', 'base')
-        model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "whisper", f"ggml-{model_name}.bin")
+        model_path = FileUtils.get_project_path(f"models/whisper/ggml-{model_name}.bin")
         language = options.get('language', 'auto')
         beam_size = min(int(options.get('beam_size', 5)), 8)
         task = options.get('task', 'transcribe')
@@ -140,7 +140,7 @@ except ImportError:
             }
         
         # 创建临时文件 - 使用绝对路径
-        temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp")
+        temp_dir = FileUtils.get_project_path("temp")
         os.makedirs(temp_dir, exist_ok=True)
         temp_wav_path = os.path.join(temp_dir, f"whisper_temp_{int(time.time())}.wav")
         

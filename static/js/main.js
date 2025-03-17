@@ -53,47 +53,130 @@ const elements = {
     exportSrtBtn: document.getElementById('export-srt-btn')
 };
 
+// 调试日志函数
+function debugLog(message, type = 'info') {
+    const timestamp = new Date().toISOString();
+    const logMessage = `[${timestamp}] [WebWhisper] [${type.toUpperCase()}] ${message}`;
+    console.log(logMessage);
+    
+    // 如果有控制台输出元素，也更新它
+    const consoleOutput = document.getElementById('console-output');
+    if (consoleOutput) {
+        consoleOutput.value += logMessage + '\n';
+        consoleOutput.scrollTop = consoleOutput.scrollHeight;
+    }
+}
+
 // 初始化 Socket.IO
 function initSocketIO() {
+    debugLog('初始化 Socket.IO 连接...');
     socket = io();
     
     // 连接事件
     socket.on('connect', () => {
-        console.log('已连接到服务器');
-        appendConsole('已连接到服务器');
+        debugLog(`Socket.IO 已连接，Socket ID: ${socket.id}`);
     });
     
     // 断开连接事件
-    socket.on('disconnect', () => {
-        console.log('与服务器断开连接');
-        appendConsole('与服务器断开连接');
+    socket.on('disconnect', (reason) => {
+        debugLog(`Socket.IO 连接断开，原因: ${reason}`, 'warn');
+    });
+    
+    // 重连事件
+    socket.on('reconnect', (attemptNumber) => {
+        debugLog(`Socket.IO 重连成功，尝试次数: ${attemptNumber}`);
+    });
+    
+    socket.on('reconnect_attempt', (attemptNumber) => {
+        debugLog(`Socket.IO 尝试重连，次数: ${attemptNumber}`, 'warn');
+    });
+    
+    socket.on('reconnect_error', (error) => {
+        debugLog(`Socket.IO 重连错误: ${error}`, 'error');
+    });
+    
+    socket.on('reconnect_failed', () => {
+        debugLog('Socket.IO 重连失败，已达到最大重试次数', 'error');
+    });
+    
+    // 错误事件
+    socket.on('error', (error) => {
+        debugLog(`Socket.IO 错误: ${error}`, 'error');
     });
     
     // 进度更新事件
     socket.on('progress_update', (data) => {
+        debugLog(`收到进度更新: task_id=${data.task_id}, progress=${data.progress}, message=${data.message}`);
         if (data.task_id === currentTaskId) {
             updateProgress(data.progress, data.message);
+        } else {
+            debugLog(`忽略非当前任务的进度更新: current=${currentTaskId}, received=${data.task_id}`, 'warn');
         }
     });
     
     // 转录完成事件
     socket.on('transcription_completed', (data) => {
+        debugLog(`收到转录完成通知: task_id=${data.task_id}, has_segments=${data.has_segments}`);
         if (data.task_id === currentTaskId) {
             transcriptionCompleted(data);
+        } else {
+            debugLog(`忽略非当前任务的完成通知: current=${currentTaskId}, received=${data.task_id}`, 'warn');
         }
     });
     
     // 转录取消事件
     socket.on('transcription_cancelled', (data) => {
+        debugLog(`收到转录取消通知: task_id=${data.task_id}`);
         if (data.task_id === currentTaskId) {
             transcriptionCancelled();
+        } else {
+            debugLog(`忽略非当前任务的取消通知: current=${currentTaskId}, received=${data.task_id}`, 'warn');
         }
     });
     
     // 转录错误事件
     socket.on('transcription_error', (data) => {
+        debugLog(`收到转录错误通知: task_id=${data.task_id}, error=${data.error}`, 'error');
         if (data.task_id === currentTaskId) {
             transcriptionError(data.error);
+        } else {
+            debugLog(`忽略非当前任务的错误通知: current=${currentTaskId}, received=${data.task_id}`, 'warn');
+        }
+    });
+    
+    debugLog('Socket.IO 事件监听器已设置');
+}
+
+// 订阅任务进度
+function subscribeToTask(taskId) {
+    debugLog(`订阅任务进度: task_id=${taskId}`);
+    if (!socket || !socket.connected) {
+        debugLog('Socket.IO 未连接，无法订阅任务', 'error');
+        return;
+    }
+    
+    socket.emit('subscribe_task', { task_id: taskId }, (response) => {
+        if (response && response.error) {
+            debugLog(`订阅任务失败: ${response.error}`, 'error');
+        } else {
+            debugLog(`已成功订阅任务: ${taskId}`);
+        }
+    });
+}
+
+// 取消订阅任务进度
+function unsubscribeFromTask(taskId) {
+    debugLog(`取消订阅任务进度: task_id=${taskId}`);
+    if (!socket || !socket.connected) {
+        debugLog('Socket.IO 未连接，无法取消订阅', 'error');
+        return;
+    }
+    
+    socket.emit('unsubscribe_task', { task_id: taskId }, (response) => {
+        if (response && response.error) {
+            debugLog(`取消订阅任务失败: ${response.error}`, 'error');
+        } else {
+            debugLog(`已成功取消订阅任务: ${taskId}`);
         }
     });
 }
@@ -367,6 +450,7 @@ function cancelTranscription() {
 
 // 转录完成
 function transcriptionCompleted(data) {
+    debugLog('处理转录完成');
     isTranscribing = false;
     updateStatus('转录完成', 'success');
     updateProgress(100, '转录完成');
@@ -378,27 +462,55 @@ function transcriptionCompleted(data) {
     
     // 启用导出按钮
     elements.exportTxtBtn.disabled = false;
-    elements.exportSrtBtn.disabled = false;
+    elements.exportSrtBtn.disabled = !data.has_segments;
+    
+    debugLog(`转录结果已更新: ${data.text.length} 字符`);
+    debugLog('界面已更新为完成状态');
 }
 
 // 转录取消
 function transcriptionCancelled() {
+    debugLog('处理转录取消');
     isTranscribing = false;
     updateStatus('转录已取消', 'warning');
     elements.startBtn.disabled = false;
     elements.stopTranscriptionBtn.disabled = true;
+    
+    updateProgress(0, '转录已取消');
+    
+    // 重置界面状态
+    const startBtn = document.getElementById('start-btn');
+    const stopBtn = document.getElementById('stop-btn');
+    
+    if (startBtn) startBtn.disabled = false;
+    if (stopBtn) stopBtn.disabled = true;
+    
+    debugLog('界面已更新为取消状态');
 }
 
 // 转录错误
 function transcriptionError(error) {
+    debugLog(`处理转录错误: ${error}`, 'error');
     isTranscribing = false;
     updateStatus(`转录错误: ${error}`, 'danger');
     elements.startBtn.disabled = false;
     elements.stopTranscriptionBtn.disabled = true;
+    
+    updateProgress(0, `错误: ${error}`);
+    
+    // 重置界面状态
+    const startBtn = document.getElementById('start-btn');
+    const stopBtn = document.getElementById('stop-btn');
+    
+    if (startBtn) startBtn.disabled = false;
+    if (stopBtn) stopBtn.disabled = true;
+    
+    debugLog('界面已更新为错误状态');
 }
 
 // 更新进度
 function updateProgress(progress, message) {
+    debugLog(`更新进度显示: ${progress}%, ${message}`);
     elements.progressBar.style.width = `${progress}%`;
     elements.progressBar.setAttribute('aria-valuenow', progress);
     
@@ -502,10 +614,10 @@ function downloadText(text, filename) {
 
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', () => {
+    debugLog('页面加载完成，开始初始化...');
     initSocketIO();
     initMediaPlayer();
     initFileUpload();
     initTranscriptionControls();
-    
-    updateStatus('WebWhisper 已准备就绪', 'info');
+    debugLog('初始化完成');
 }); 

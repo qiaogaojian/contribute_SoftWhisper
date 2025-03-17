@@ -15,3 +15,4 @@ log
 /models
 uploads/
 whisper.cpp/
+temp/

@@ -7,6 +7,8 @@ let socket;
 let currentTaskId = null;
 let mediaPlayer = null;
 let isTranscribing = false;
+let subtitles = []; // 字幕数据
+let currentSubtitleIndex = -1; // 当前显示的字幕索引
 
 // DOM 元素
 const elements = {
@@ -19,6 +21,8 @@ const elements = {
     pauseBtn: document.getElementById('pause-btn'),
     stopBtn: document.getElementById('stop-btn'),
     timeDisplay: document.getElementById('time-display'),
+    subtitleContainer: document.getElementById('subtitle-container'),
+    subtitleText: document.getElementById('subtitle-text'),
     
     // 文件上传
     fileUpload: document.getElementById('file-upload'),
@@ -293,6 +297,11 @@ function initMediaPlayer() {
     elements.playBtn.addEventListener('click', () => {
         const player = getActivePlayer();
         if (player) {
+            // 在播放前检查并加载字幕
+            if (currentTaskId && subtitles.length === 0) {
+                debugLog('播放前检查并加载字幕');
+                loadSubtitles(currentTaskId);
+            }
             player.play();
         }
     });
@@ -319,6 +328,7 @@ function initMediaPlayer() {
     function setupTimeUpdate(player) {
         player.addEventListener('timeupdate', () => {
             updateTimeDisplay(player.currentTime, player.duration);
+            updateSubtitle(player.currentTime);
         });
         
         player.addEventListener('loadedmetadata', () => {
@@ -342,21 +352,135 @@ function getActivePlayer() {
 
 // 更新时间显示
 function updateTimeDisplay(currentTime, duration) {
-    elements.timeDisplay.textContent = `${formatTime(currentTime)} / ${formatTime(duration)}`;
+    const currentTimeStr = formatTime(currentTime);
+    const durationStr = formatTime(duration);
+    elements.timeDisplay.textContent = `${currentTimeStr} / ${durationStr}`;
 }
 
-// 格式化时间
+// 格式化时间为 HH:MM:SS
 function formatTime(seconds) {
-    if (isNaN(seconds) || seconds === Infinity) {
+    if (isNaN(seconds)) {
         return '00:00:00';
     }
     
-    seconds = Math.floor(seconds);
     const h = Math.floor(seconds / 3600);
     const m = Math.floor((seconds % 3600) / 60);
-    const s = seconds % 60;
+    const s = Math.floor(seconds % 60);
     
     return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+}
+
+// 加载字幕
+function loadSubtitles(taskId) {
+    if (!taskId) {
+        debugLog('无法加载字幕：任务ID为空', 'error');
+        return;
+    }
+    
+    debugLog(`开始加载字幕: task_id=${taskId}`);
+    
+    // 首先检查任务状态
+    fetch(`/check_task_status?task_id=${taskId}`)
+        .then(response => {
+            if (!response.ok) {
+                return response.json().then(data => {
+                    throw new Error(data.error || `HTTP错误 ${response.status}`);
+                });
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.success) {
+                debugLog(`任务状态: ${data.status}, 进度: ${data.progress}%, 是否完成: ${data.is_completed}`);
+                
+                if (data.is_completed) {
+                    // 任务已完成，获取字幕
+                    fetchSubtitles(taskId);
+                } else if (data.status === 'running') {
+                    // 任务仍在运行，稍后重试
+                    debugLog('任务仍在运行，2秒后重试加载字幕', 'warn');
+                    setTimeout(() => loadSubtitles(taskId), 2000);
+                } else {
+                    // 任务状态异常
+                    debugLog(`任务状态异常，无法加载字幕: ${data.status}`, 'error');
+                    updateStatus(`无法加载字幕: 任务状态${data.status}`, 'warning');
+                }
+            } else {
+                throw new Error(data.error || '检查任务状态失败');
+            }
+        })
+        .catch(error => {
+            console.error('检查任务状态错误:', error);
+            debugLog(`检查任务状态错误: ${error.message}`, 'error');
+        });
+}
+
+// 获取字幕数据
+function fetchSubtitles(taskId) {
+    fetch('/get_subtitles', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ task_id: taskId })
+    })
+    .then(response => {
+        if (!response.ok) {
+            return response.json().then(data => {
+                throw new Error(data.error || `HTTP错误 ${response.status}`);
+            });
+        }
+        return response.json();
+    })
+    .then(data => {
+        if (data.success && data.subtitles) {
+            subtitles = data.subtitles;
+            debugLog(`已加载${subtitles.length}条字幕`);
+            if (subtitles.length > 0) {
+                elements.subtitleContainer.classList.remove('d-none');
+            }
+        } else {
+            throw new Error(data.error || '未知错误');
+        }
+    })
+    .catch(error => {
+        console.error('字幕加载错误:', error);
+        debugLog(`字幕请求错误: ${error.message}`, 'error');
+        
+        // 如果错误是因为转录尚未完成，可以稍后重试
+        if (error.message.includes('转录尚未完成')) {
+            debugLog('转录尚未完成，将在2秒后重试加载字幕', 'warn');
+            setTimeout(() => loadSubtitles(taskId), 2000);
+        }
+    });
+}
+
+// 更新字幕显示
+function updateSubtitle(currentTime) {
+    if (!subtitles || subtitles.length === 0) {
+        return;
+    }
+    
+    // 查找当前时间对应的字幕
+    let currentSubtitle = null;
+    for (const subtitle of subtitles) {
+        if (currentTime >= subtitle.start && currentTime <= subtitle.end) {
+            currentSubtitle = subtitle;
+            break;
+        }
+    }
+    
+    // 更新字幕显示
+    if (currentSubtitle) {
+        if (elements.subtitleContainer.classList.contains('d-none')) {
+            elements.subtitleContainer.classList.remove('d-none');
+        }
+        elements.subtitleText.textContent = currentSubtitle.text;
+        debugLog(`显示字幕: ${currentSubtitle.text.substring(0, 30)}${currentSubtitle.text.length > 30 ? '...' : ''}`, 'debug');
+    } else {
+        elements.subtitleText.textContent = '';
+        // 不隐藏字幕容器，只清空文本
+    }
 }
 
 // 初始化文件上传
@@ -411,6 +535,11 @@ function loadMedia(file, fileType) {
     elements.videoPlayer.classList.add('d-none');
     elements.audioPlayer.classList.add('d-none');
     elements.noMediaText.classList.remove('d-none');
+    elements.subtitleContainer.classList.add('d-none');
+    
+    // 重置字幕
+    subtitles = [];
+    currentSubtitleIndex = -1;
     
     if (fileType === 'video') {
         // 视频文件
@@ -430,6 +559,11 @@ function loadMedia(file, fileType) {
     elements.playBtn.disabled = false;
     elements.pauseBtn.disabled = false;
     elements.stopBtn.disabled = false;
+    
+    // 如果已经有任务ID，尝试加载字幕
+    if (currentTaskId) {
+        loadSubtitles(currentTaskId);
+    }
 }
 
 // 初始化转录控制
@@ -573,22 +707,30 @@ function cancelTranscription() {
 
 // 转录完成
 function transcriptionCompleted(data) {
-    debugLog('处理转录完成');
-    isTranscribing = false;
-    updateStatus('转录完成', 'success');
-    updateProgress(100, '转录完成');
-    elements.startBtn.disabled = false;
-    elements.stopTranscriptionBtn.disabled = true;
+    debugLog('转录完成: ' + JSON.stringify(data));
+    updateStatus('转录完成！', 'success');
     
-    // 显示转录结果
-    elements.transcriptionResult.value = data.text;
+    // 更新UI状态
+    elements.transcribeBtn.disabled = false;
+    elements.fileInput.disabled = false;
     
-    // 启用导出按钮
-    elements.exportTxtBtn.disabled = false;
-    elements.exportSrtBtn.disabled = !data.has_segments;
+    // 保存当前任务ID，但不自动加载字幕
+    // 字幕将在用户点击播放按钮时加载
+    if (data && data.task_id) {
+        currentTaskId = data.task_id;
+        debugLog(`保存任务ID: ${currentTaskId}，字幕将在播放时加载`);
+    }
     
-    debugLog(`转录结果已更新: ${data.text.length} 字符`);
-    debugLog('界面已更新为完成状态');
+    // 显示下载按钮
+    elements.downloadContainer.classList.remove('d-none');
+    
+    // 启用下载按钮
+    if (elements.downloadSrtBtn) {
+        elements.downloadSrtBtn.disabled = false;
+    }
+    if (elements.downloadTxtBtn) {
+        elements.downloadTxtBtn.disabled = false;
+    }
 }
 
 // 转录取消
@@ -743,4 +885,4 @@ document.addEventListener('DOMContentLoaded', () => {
     initFileUpload();
     initTranscriptionControls();
     debugLog('初始化完成');
-}); 
+});

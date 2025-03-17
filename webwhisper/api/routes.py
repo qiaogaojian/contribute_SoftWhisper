@@ -10,6 +10,7 @@ from webwhisper.core.transcriber import transcriber
 from webwhisper.utils.logging_utils import logger
 from webwhisper.config import config
 from webwhisper.core.task_manager import task_manager
+from webwhisper.models.task import TaskStatus
 
 # 创建蓝图
 api = Blueprint('api', __name__)
@@ -120,6 +121,59 @@ def download_srt():
     return jsonify(result)
 
 
+@api.route('/get_subtitles', methods=['POST'])
+def get_subtitles():
+    """获取字幕数据用于实时显示"""
+    data = request.get_json()
+    task_id = data.get('task_id')
+    
+    logger.info(f"收到字幕请求: task_id={task_id}")
+    
+    if not task_id:
+        logger.warning("字幕请求缺少task_id")
+        return jsonify({'success': False, 'error': '缺少任务ID'}), 400
+    
+    task = task_manager.get_task(task_id)
+    
+    if not task:
+        logger.warning(f"请求的任务不存在: task_id={task_id}")
+        return jsonify({'success': False, 'error': '任务不存在'}), 404
+    
+    # 记录任务状态
+    logger.info(f"任务状态: task_id={task_id}, status={task.status}")
+    
+    # 检查任务是否已完成
+    if task.status != TaskStatus.COMPLETED:
+        logger.warning(f"任务尚未完成，无法获取字幕: task_id={task_id}, status={task.status}")
+        return jsonify({'success': False, 'error': f'转录尚未完成，当前状态: {task.status.value}'}), 400
+    
+    # 获取任务结果
+    result = task.result
+    if not result or 'segments' not in result:
+        logger.warning(f"任务结果中缺少segments: task_id={task_id}")
+        return jsonify({'success': False, 'error': '转录结果中没有字幕段落'}), 400
+    
+    segments = result.get('segments', [])
+    if not segments:
+        logger.warning(f"任务结果中segments为空: task_id={task_id}")
+        return jsonify({'success': False, 'error': '转录结果中没有字幕段落'}), 400
+    
+    # 格式化字幕数据
+    subtitles = []
+    for i, segment in enumerate(segments):
+        if 'start' in segment and 'end' in segment and 'text' in segment:
+            subtitle = {
+                'id': i + 1,
+                'start': segment['start'],
+                'end': segment['end'],
+                'text': segment['text'].strip()
+            }
+            subtitles.append(subtitle)
+    
+    logger.info(f"成功返回字幕数据: task_id={task_id}, 字幕数量={len(subtitles)}")
+    return jsonify({'success': True, 'subtitles': subtitles})
+
+
 @api.route('/download/<filename>')
 def download_file(filename):
     """下载文件"""
@@ -138,4 +192,35 @@ def update_config():
         config.set('whisper_executable', data['whisper_path'])
     
     config.save()
-    return jsonify({'success': True}) 
+    return jsonify({'success': True})
+
+
+@api.route('/check_task_status', methods=['GET'])
+def check_task_status():
+    """检查任务状态"""
+    task_id = request.args.get('task_id')
+    
+    logger.info(f"检查任务状态: task_id={task_id}")
+    
+    if not task_id:
+        logger.warning("检查任务状态请求缺少task_id")
+        return jsonify({'success': False, 'error': '缺少任务ID'}), 400
+    
+    task = task_manager.get_task(task_id)
+    
+    if not task:
+        logger.warning(f"请求的任务不存在: task_id={task_id}")
+        return jsonify({'success': False, 'error': '任务不存在'}), 404
+    
+    # 返回任务状态
+    status_info = {
+        'success': True,
+        'task_id': task_id,
+        'status': task.status.value,
+        'progress': task.progress,
+        'message': task.message,
+        'is_completed': task.status == TaskStatus.COMPLETED
+    }
+    
+    logger.info(f"任务状态信息: {status_info}")
+    return jsonify(status_info) 

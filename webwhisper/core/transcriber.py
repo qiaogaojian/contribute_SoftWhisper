@@ -19,7 +19,7 @@ class Transcriber:
     
     def __init__(self):
         """初始化转录器"""
-        pass
+        self.task_manager = task_manager
     
     def create_transcription_task(self, file_path, options):
         """
@@ -30,47 +30,25 @@ class Transcriber:
             options: 转录选项
         
         Returns:
-            dict: 任务信息
+            dict: 包含任务ID的字典
         """
-        # 检查文件是否存在
-        if not os.path.exists(file_path):
-            logger.error(f"文件不存在: {file_path}")
-            return {'success': False, 'error': f'文件不存在: {file_path}'}
-        
-        # 获取Whisper可执行文件路径
-        whisper_path = options.get('whisper_executable', config.get('whisper_executable'))
-        
-        # 确保使用绝对路径
-        if not os.path.isabs(whisper_path):
-            whisper_path = FileUtils.get_project_path(whisper_path)
-        
-        # 如果用户选择了目录，猜测实际的二进制文件名
-        if os.path.isdir(whisper_path):
-            if os.name == "nt":
-                whisper_path = os.path.join(whisper_path, "whisper-cli.exe")
-            else:
-                whisper_path = os.path.join(whisper_path, "whisper-cli")
-        
-        # 检查可执行文件是否存在
-        if not os.path.exists(whisper_path):
-            logger.error(f"Whisper可执行文件不存在: {whisper_path}")
-            return {'success': False, 'error': f'Whisper可执行文件不存在: {whisper_path}'}
-        
-        # 更新选项
-        options['whisper_executable'] = whisper_path
-        
-        # 创建任务ID
-        import time
-        task_id = str(int(time.time()))
-        
-        # 创建任务
-        task = task_manager.create_task(task_id, file_path, options)
-        
-        return {
-            'success': True,
-            'task_id': task_id,
-            'file_path': file_path
-        }
+        try:
+            # 从options中获取task_id
+            task_id = options.get('task_id')
+            
+            # 创建任务
+            task = self.task_manager.create_task(file_path, options, task_id)
+            
+            return {
+                'success': True,
+                'task_id': task.task_id
+            }
+        except Exception as e:
+            logger.error(f"创建转录任务失败: {str(e)}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
     
     def start_transcription(self, task_id):
         """

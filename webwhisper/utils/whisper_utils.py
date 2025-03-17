@@ -82,7 +82,7 @@ def build_whisper_command(model_path, audio_path, options):
         list: 命令列表
     """
     # 获取可执行文件路径
-    executable = options.get('whisper_executable', config.get('whisper_executable'))
+    executable = config.get('whisper_executable')
     
     # 确保使用绝对路径
     executable = FileUtils.get_project_path(executable)

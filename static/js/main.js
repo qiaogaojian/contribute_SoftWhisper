@@ -158,8 +158,10 @@ function subscribeToTask(taskId) {
     socket.emit('subscribe_task', { task_id: taskId }, (response) => {
         if (response && response.error) {
             debugLog(`订阅任务失败: ${response.error}`, 'error');
+            updateStatus(`订阅任务失败: ${response.error}`, 'danger');
         } else {
             debugLog(`已成功订阅任务: ${taskId}`);
+            updateStatus('已连接到转录服务', 'info');
         }
     });
 }
@@ -381,6 +383,8 @@ function initTranscriptionControls() {
 
 // 开始转录
 function startTranscription() {
+    debugLog('准备开始转录...');
+    
     // 获取设置
     const options = {
         task_id: currentTaskId,
@@ -394,6 +398,8 @@ function startTranscription() {
         whisper_path: elements.whisperPath.value
     };
     
+    debugLog(`开始转录请求: ${JSON.stringify(options)}`);
+    
     // 发送转录请求
     fetch('/transcribe', {
         method: 'POST',
@@ -405,6 +411,19 @@ function startTranscription() {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
+            debugLog(`转录请求成功，新任务ID: ${data.task_id}`);
+            
+            // 取消订阅旧任务
+            if (currentTaskId) {
+                debugLog(`取消订阅旧任务: ${currentTaskId}`);
+                unsubscribeFromTask(currentTaskId);
+            }
+            
+            // 更新当前任务ID并订阅
+            currentTaskId = data.task_id;
+            debugLog(`订阅新任务: ${currentTaskId}`);
+            subscribeToTask(currentTaskId);
+            
             isTranscribing = true;
             updateStatus('转录已开始', 'info');
             elements.startBtn.disabled = true;
@@ -414,10 +433,12 @@ function startTranscription() {
             elements.exportTxtBtn.disabled = true;
             elements.exportSrtBtn.disabled = true;
         } else {
+            debugLog(`转录请求失败: ${data.error}`, 'error');
             updateStatus(`转录请求失败: ${data.error}`, 'danger');
         }
     })
     .catch(error => {
+        debugLog(`转录请求错误: ${error.message}`, 'error');
         console.error('转录请求错误:', error);
         updateStatus(`转录请求错误: ${error.message}`, 'danger');
     });

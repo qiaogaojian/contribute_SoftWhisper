@@ -9,6 +9,7 @@ from webwhisper.core.file_manager import file_manager
 from webwhisper.core.transcriber import transcriber
 from webwhisper.utils.logging_utils import logger
 from webwhisper.config import config
+from webwhisper.core.task_manager import task_manager
 
 # 创建蓝图
 api = Blueprint('api', __name__)
@@ -37,61 +38,45 @@ def upload_file():
 
 
 @api.route('/transcribe', methods=['POST'])
-def start_transcription():
-    """开始转录任务"""
-    data = request.json
-    task_id = data.get('task_id')
-    file_path = data.get('file_path') or session.get('current_file_path')
-    
-    logger.info(f"转录请求: task_id={task_id}, file_path={file_path}, session={session}")
-    
-    if not task_id:
-        return jsonify({'error': '无效的任务ID'}), 400
-    
-    if not file_path:
-        # 尝试从任务ID推断文件路径
-        import os
-        import time
-        upload_folder = config.get('upload_folder')
-        for filename in os.listdir(upload_folder):
-            full_path = os.path.join(upload_folder, filename)
-            if os.path.isfile(full_path) and os.path.getmtime(full_path) > time.time() - 300:  # 5分钟内上传的文件
-                file_path = full_path
-                session['current_file_path'] = file_path
-                logger.info(f"从最近上传的文件推断文件路径: {file_path}")
-                break
-    
-    if not file_path:
-        return jsonify({'error': '无效的文件路径，请重新上传文件'}), 400
-    
-    # 转录选项
-    options = {
-        'model_name': data.get('model', 'base'),
-        'task': data.get('task', 'transcribe'),
-        'language': data.get('language', 'auto'),
-        'beam_size': int(data.get('beam_size', 5)),
-        'start_time': data.get('start_time', '00:00:00'),
-        'end_time': data.get('end_time', ''),
-        'generate_srt': data.get('generate_srt', False),
-        'whisper_executable': config.get('whisper_executable')
-    }
-    
-    # 创建转录任务
-    result = transcriber.create_transcription_task(file_path, options)
-    
-    if not result['success']:
-        return jsonify(result), 400
-    
-    # 启动转录
-    start_result = transcriber.start_transcription(result['task_id'])
-    
-    if not start_result['success']:
-        return jsonify(start_result), 400
-    
-    return jsonify({
-        'success': True,
-        'task_id': result['task_id']
-    })
+def transcribe():
+    """处理转录请求"""
+    try:
+        # 获取会话中的文件路径和任务ID
+        file_path = session.get('current_file_path')
+        task_id = session.get('current_task_id')
+        
+        if not file_path or not task_id:
+            return jsonify({'success': False, 'error': '请先上传文件'})
+        
+        # 获取请求参数
+        data = request.get_json()
+        options = {
+            'task_id': task_id,  # 使用session中的task_id
+            'model': data.get('model', 'base'),
+            'task': data.get('task', 'transcribe'),
+            'language': data.get('language', 'auto'),
+            'beam_size': int(data.get('beam_size', 5)),
+            'start_time': data.get('start_time'),
+            'end_time': data.get('end_time'),
+            'generate_srt': data.get('generate_srt', False),
+            'whisper_executable': data.get('whisper_path', config.get('whisper_executable'))
+        }
+        
+        logger.info(f"转录请求: task_id={task_id}, file_path={file_path}, session={session}")
+        
+        # 创建转录任务
+        result = transcriber.create_transcription_task(file_path, options)
+        
+        if result['success']:
+            # 启动转录
+            transcriber.start_transcription(result['task_id'])
+            return jsonify({'success': True, 'task_id': result['task_id']})
+        else:
+            return jsonify({'success': False, 'error': result['error']})
+            
+    except Exception as e:
+        logger.error(f"处理转录请求失败: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)})
 
 
 @api.route('/cancel_transcription', methods=['POST'])

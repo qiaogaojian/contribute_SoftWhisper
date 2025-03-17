@@ -29,19 +29,23 @@ class TaskManager:
         self.max_tasks = max_tasks
         self.lock = threading.Lock()  # 用于线程安全
     
-    def create_task(self, task_id, file_path, options):
+    def create_task(self, file_path, options, task_id=None):
         """
         创建任务
         
         Args:
-            task_id: 任务ID
             file_path: 文件路径
             options: 转录选项
+            task_id: 任务ID（可选，如果不提供则自动生成）
         
         Returns:
             TranscriptionTask: 任务对象
         """
         with self.lock:
+            # 如果没有提供任务ID，则生成一个新的
+            if task_id is None:
+                task_id = str(int(time.time()))
+            
             # 检查文件是否存在
             if not os.path.exists(file_path):
                 logger.error(f"文件不存在: {file_path}")

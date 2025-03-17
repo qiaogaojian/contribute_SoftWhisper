@@ -149,6 +149,10 @@ class WebWhisperNamespace(Namespace):
             logger.debug(f"初始进度已发送: task_id={task_id}, progress={task.progress}")
         except Exception as e:
             logger.error(f"发送初始进度失败: task_id={task_id}, error={str(e)}")
+        
+        # 发送订阅确认
+        emit('subscription_confirmed', {'task_id': task_id})
+        logger.info(f"订阅确认已发送: client_id={client_id}, task_id={task_id}")
     
     def on_unsubscribe_task(self, data):
         """

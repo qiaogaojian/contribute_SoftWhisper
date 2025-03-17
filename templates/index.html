@@ -194,8 +194,378 @@
     </div>
 
     <!-- JavaScript 库 -->
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/socket.io/client-dist/socket.io.min.js"></script>
-    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/socket.io@4.6.1/client-dist/socket.io.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // 全局变量
+            let currentTaskId = null;
+            let currentFilePath = null;
+            let socket = io();
+            
+            // 元素引用
+            const fileUpload = document.getElementById('file-upload');
+            const startBtn = document.getElementById('start-btn');
+            const stopBtn = document.getElementById('stop-btn');
+            const statusMessage = document.getElementById('status-message');
+            const progressBar = document.getElementById('progress-bar');
+            const consoleOutput = document.getElementById('console-output');
+            const transcriptionResult = document.getElementById('transcription-result');
+            const exportTxtBtn = document.getElementById('export-txt-btn');
+            const exportSrtBtn = document.getElementById('export-srt-btn');
+            const uploadInfo = document.getElementById('upload-info');
+            const uploadFilename = document.getElementById('upload-filename');
+            
+            // 调试函数
+            function debugLog(message) {
+                console.log(`[WebWhisper] ${message}`);
+                consoleOutput.value += message + '\n';
+                consoleOutput.scrollTop = consoleOutput.scrollHeight;
+            }
+            
+            // Socket.io 事件
+            socket.on('connect', function() {
+                debugLog('已连接到服务器');
+            });
+            
+            socket.on('disconnect', function() {
+                debugLog('与服务器断开连接');
+            });
+            
+            socket.on('progress_update', function(data) {
+                debugLog(`收到进度更新: ${data.progress}%, ${data.message}`);
+                if (data.task_id === currentTaskId) {
+                    progressBar.style.width = data.progress + '%';
+                    statusMessage.textContent = data.message;
+                }
+            });
+            
+            socket.on('transcription_completed', function(data) {
+                debugLog('转录完成');
+                if (data.task_id === currentTaskId) {
+                    progressBar.style.width = '100%';
+                    statusMessage.textContent = '转录完成';
+                    transcriptionResult.value = data.text;
+                    startBtn.disabled = false;
+                    stopBtn.disabled = true;
+                    exportTxtBtn.disabled = false;
+                    exportSrtBtn.disabled = false;
+                }
+            });
+            
+            socket.on('transcription_error', function(data) {
+                debugLog(`转录错误: ${data.error}`);
+                if (data.task_id === currentTaskId) {
+                    statusMessage.textContent = `错误: ${data.error}`;
+                    startBtn.disabled = false;
+                    stopBtn.disabled = true;
+                }
+            });
+            
+            socket.on('transcription_cancelled', function(data) {
+                debugLog('转录已取消');
+                if (data.task_id === currentTaskId) {
+                    statusMessage.textContent = '转录已取消';
+                    startBtn.disabled = false;
+                    stopBtn.disabled = true;
+                }
+            });
+            
+            // 文件上传处理
+            fileUpload.addEventListener('change', function(e) {
+                const file = e.target.files[0];
+                if (!file) return;
+                
+                debugLog(`选择文件: ${file.name}`);
+                
+                const formData = new FormData();
+                formData.append('file', file);
+                
+                statusMessage.textContent = '正在上传文件...';
+                
+                fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        currentTaskId = data.task_id;
+                        currentFilePath = data.file_path;
+                        debugLog(`文件上传成功: ${data.filename}, 任务ID: ${currentTaskId}`);
+                        
+                        uploadInfo.classList.remove('d-none');
+                        uploadFilename.textContent = `已上传: ${data.filename}`;
+                        statusMessage.textContent = '文件已上传，准备转录';
+                        startBtn.disabled = false;
+                        
+                        // 设置媒体播放器
+                        setupMediaPlayer(file);
+                    } else {
+                        debugLog(`上传失败: ${data.error}`);
+                        statusMessage.textContent = `上传失败: ${data.error}`;
+                    }
+                })
+                .catch(error => {
+                    debugLog(`上传错误: ${error}`);
+                    statusMessage.textContent = `上传错误: ${error}`;
+                });
+            });
+            
+            // 开始转录
+            startBtn.addEventListener('click', function() {
+                if (!currentTaskId) {
+                    alert('请先上传文件');
+                    return;
+                }
+                
+                const modelSelect = document.getElementById('model-select');
+                const languageInput = document.getElementById('language-input');
+                const taskSelect = document.getElementById('task-select');
+                const beamSize = document.getElementById('beam-size');
+                const startTime = document.getElementById('start-time');
+                const endTime = document.getElementById('end-time');
+                const generateSrt = document.getElementById('generate-srt');
+                const whisperPath = document.getElementById('whisper-path');
+                
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                exportTxtBtn.disabled = true;
+                exportSrtBtn.disabled = true;
+                
+                statusMessage.textContent = '准备转录...';
+                progressBar.style.width = '0%';
+                
+                debugLog(`开始转录: 模型=${modelSelect.value}, 语言=${languageInput.value}, 任务=${taskSelect.value}`);
+                
+                fetch('/transcribe', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        task_id: currentTaskId,
+                        file_path: currentFilePath,
+                        model: modelSelect.value,
+                        language: languageInput.value,
+                        task: taskSelect.value,
+                        beam_size: beamSize.value,
+                        start_time: startTime.value,
+                        end_time: endTime.value,
+                        generate_srt: generateSrt.checked,
+                        whisper_path: whisperPath.value
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (!data.success) {
+                        debugLog(`转录请求失败: ${data.error}`);
+                        statusMessage.textContent = `转录请求失败: ${data.error}`;
+                        startBtn.disabled = false;
+                        stopBtn.disabled = true;
+                    } else {
+                        debugLog('转录请求已发送');
+                    }
+                })
+                .catch(error => {
+                    debugLog(`转录请求错误: ${error}`);
+                    statusMessage.textContent = `转录请求错误: ${error}`;
+                    startBtn.disabled = false;
+                    stopBtn.disabled = true;
+                });
+            });
+            
+            // 停止转录
+            stopBtn.addEventListener('click', function() {
+                if (!currentTaskId) return;
+                
+                debugLog('取消转录...');
+                
+                fetch('/cancel_transcription', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        task_id: currentTaskId
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (!data.success) {
+                        debugLog(`取消失败: ${data.error}`);
+                    } else {
+                        debugLog('已发送取消请求');
+                    }
+                })
+                .catch(error => {
+                    debugLog(`取消请求错误: ${error}`);
+                });
+            });
+            
+            // 导出文本
+            exportTxtBtn.addEventListener('click', function() {
+                if (!transcriptionResult.value) return;
+                
+                const blob = new Blob([transcriptionResult.value], {type: 'text/plain'});
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'transcription.txt';
+                a.click();
+                URL.revokeObjectURL(url);
+            });
+            
+            // 导出SRT
+            exportSrtBtn.addEventListener('click', function() {
+                if (!currentTaskId) return;
+                
+                debugLog('请求SRT字幕...');
+                
+                fetch('/download_srt', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        task_id: currentTaskId
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        window.location.href = '/download/' + data.filename;
+                        debugLog(`SRT下载已开始: ${data.filename}`);
+                    } else {
+                        debugLog(`SRT下载失败: ${data.error}`);
+                    }
+                })
+                .catch(error => {
+                    debugLog(`SRT请求错误: ${error}`);
+                });
+            });
+            
+            // 保存配置
+            document.getElementById('save-config-btn').addEventListener('click', function() {
+                const beamSize = document.getElementById('beam-size').value;
+                const whisperPath = document.getElementById('whisper-path').value;
+                
+                debugLog('保存配置...');
+                
+                fetch('/save_config', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        beam_size: beamSize,
+                        whisper_path: whisperPath
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        debugLog('配置已保存');
+                    } else {
+                        debugLog(`保存配置失败: ${data.error}`);
+                    }
+                })
+                .catch(error => {
+                    debugLog(`保存配置错误: ${error}`);
+                });
+            });
+            
+            // 设置媒体播放器
+            function setupMediaPlayer(file) {
+                const videoPlayer = document.getElementById('video-player');
+                const audioPlayer = document.getElementById('audio-player');
+                const noMediaText = document.getElementById('no-media-text');
+                const playBtn = document.getElementById('play-btn');
+                const pauseBtn = document.getElementById('pause-btn');
+                const stopBtn = document.getElementById('stop-btn');
+                const timeDisplay = document.getElementById('time-display');
+                
+                // 重置播放器
+                videoPlayer.classList.add('d-none');
+                audioPlayer.classList.add('d-none');
+                noMediaText.classList.remove('d-none');
+                
+                // 创建文件URL
+                const fileUrl = URL.createObjectURL(file);
+                
+                // 判断文件类型
+                const fileType = file.type.split('/')[0];
+                
+                if (fileType === 'video') {
+                    // 视频文件
+                    videoPlayer.src = fileUrl;
+                    videoPlayer.classList.remove('d-none');
+                    noMediaText.classList.add('d-none');
+                    
+                    // 启用控制按钮
+                    playBtn.disabled = false;
+                    pauseBtn.disabled = false;
+                    stopBtn.disabled = false;
+                    
+                    // 设置控制按钮事件
+                    playBtn.onclick = () => videoPlayer.play();
+                    pauseBtn.onclick = () => videoPlayer.pause();
+                    stopBtn.onclick = () => {
+                        videoPlayer.pause();
+                        videoPlayer.currentTime = 0;
+                    };
+                    
+                    // 更新时间显示
+                    videoPlayer.addEventListener('timeupdate', function() {
+                        const currentTime = formatTime(videoPlayer.currentTime);
+                        const duration = formatTime(videoPlayer.duration);
+                        timeDisplay.textContent = `${currentTime} / ${duration}`;
+                    });
+                } else if (fileType === 'audio') {
+                    // 音频文件
+                    audioPlayer.src = fileUrl;
+                    audioPlayer.classList.remove('d-none');
+                    noMediaText.classList.add('d-none');
+                    
+                    // 启用控制按钮
+                    playBtn.disabled = false;
+                    pauseBtn.disabled = false;
+                    stopBtn.disabled = false;
+                    
+                    // 设置控制按钮事件
+                    playBtn.onclick = () => audioPlayer.play();
+                    pauseBtn.onclick = () => audioPlayer.pause();
+                    stopBtn.onclick = () => {
+                        audioPlayer.pause();
+                        audioPlayer.currentTime = 0;
+                    };
+                    
+                    // 更新时间显示
+                    audioPlayer.addEventListener('timeupdate', function() {
+                        const currentTime = formatTime(audioPlayer.currentTime);
+                        const duration = formatTime(audioPlayer.duration);
+                        timeDisplay.textContent = `${currentTime} / ${duration}`;
+                    });
+                } else {
+                    // 不支持的文件类型
+                    noMediaText.textContent = '不支持的媒体类型';
+                    playBtn.disabled = true;
+                    pauseBtn.disabled = true;
+                    stopBtn.disabled = true;
+                }
+            }
+            
+            // 格式化时间为 HH:MM:SS
+            function formatTime(seconds) {
+                if (isNaN(seconds)) return '00:00:00';
+                
+                const h = Math.floor(seconds / 3600);
+                const m = Math.floor((seconds % 3600) / 60);
+                const s = Math.floor(seconds % 60);
+                
+                return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+            }
+        });
+    </script>
 </body>
 </html> 

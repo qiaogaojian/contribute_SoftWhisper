@@ -27,10 +27,20 @@ def get_default_whisper_cpp_path():
     program_dir = os.path.dirname(os.path.abspath(__file__))
     if os.name == "nt":
         # Windows 路径
-        return os.path.join(program_dir, "Whisper_win-x64")
+        whisper_dir = os.path.join(program_dir, "Whisper_win-x64")
+        whisper_exe = os.path.join(whisper_dir, "whisper-cli.exe")
     else:
         # Linux 路径
-        return os.path.join(program_dir, "Whisper_linux-x64")
+        whisper_dir = os.path.join(program_dir, "Whisper_linux-x64")
+        whisper_exe = os.path.join(whisper_dir, "whisper-cli")
+    
+    # 检查可执行文件是否存在
+    if os.path.exists(whisper_exe):
+        return whisper_exe
+    elif os.path.exists(whisper_dir):
+        return whisper_dir
+    else:
+        return whisper_dir  # 返回目录路径，即使它不存在
 
 # 配置文件
 CONFIG_FILE = 'web_config.json'
@@ -40,7 +50,10 @@ app = Flask(__name__)
 app.secret_key = os.urandom(24)
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB 最大上传限制
-socketio = SocketIO(app)
+app.config['SESSION_TYPE'] = 'filesystem'
+app.config['SESSION_PERMANENT'] = True
+app.config['PERMANENT_SESSION_LIFETIME'] = 3600  # 会话有效期1小时
+socketio = SocketIO(app, manage_session=False)
 
 # 确保上传目录存在
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -108,17 +121,81 @@ except ImportError:
         """
         debug_print(f"转录文件: {file_path}")
         model_name = options.get('model_name', 'base')
-        model_path = os.path.join("models", "whisper", f"ggml-{model_name}.bin")
+        model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "whisper", f"ggml-{model_name}.bin")
         language = options.get('language', 'auto')
         beam_size = min(int(options.get('beam_size', 5)), 8)
         task = options.get('task', 'transcribe')
         
+        # 检查模型文件是否存在
+        if not os.path.exists(model_path):
+            os.makedirs(os.path.dirname(model_path), exist_ok=True)
+            debug_print(f"模型文件 {model_path} 不存在，请确保已下载模型")
+            if progress_callback:
+                progress_callback(0, f"错误: 模型文件 {model_path} 不存在")
+            return {
+                'text': f"错误: 模型文件 {model_path} 不存在，请确保已下载模型",
+                'segments': [],
+                'stderr': f"模型文件 {model_path} 不存在",
+                'cancelled': True
+            }
+        
+        # 创建临时文件 - 使用绝对路径
+        temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp")
+        os.makedirs(temp_dir, exist_ok=True)
+        temp_wav_path = os.path.join(temp_dir, f"whisper_temp_{int(time.time())}.wav")
+        
+        debug_print(f"创建临时WAV文件: {temp_wav_path}")
+        
+        # 转换音频文件为WAV格式
+        try:
+            from pydub import AudioSegment
+            audio = AudioSegment.from_file(file_path)
+            audio.export(temp_wav_path, format="wav")
+            debug_print(f"音频文件已转换为WAV格式: {temp_wav_path}")
+        except Exception as e:
+            debug_print(f"音频转换失败: {str(e)}")
+            if progress_callback:
+                progress_callback(0, f"音频转换失败: {str(e)}")
+            return {
+                'text': f"音频转换失败: {str(e)}",
+                'segments': [],
+                'stderr': str(e),
+                'cancelled': True
+            }
+        
+        # 检查临时文件是否存在
+        if not os.path.exists(temp_wav_path):
+            debug_print(f"临时WAV文件创建失败: {temp_wav_path}")
+            if progress_callback:
+                progress_callback(0, "临时WAV文件创建失败")
+            return {
+                'text': "临时WAV文件创建失败",
+                'segments': [],
+                'stderr': "临时WAV文件创建失败",
+                'cancelled': True
+            }
+        
         # 构建 whisper-cli 命令
         executable = options.get('whisper_executable')
+        if not os.path.isabs(executable):
+            executable = os.path.join(os.path.dirname(os.path.abspath(__file__)), executable)
+        
+        # 确保可执行文件存在
+        if not os.path.exists(executable):
+            debug_print(f"Whisper可执行文件不存在: {executable}")
+            if progress_callback:
+                progress_callback(0, f"错误: Whisper可执行文件不存在: {executable}")
+            return {
+                'text': f"错误: Whisper可执行文件不存在: {executable}",
+                'segments': [],
+                'stderr': f"Whisper可执行文件不存在: {executable}",
+                'cancelled': True
+            }
+        
         cmd = [
             executable,
             "-m", model_path,
-            "-f", file_path,
+            "-f", temp_wav_path,
             "-bs", str(beam_size),
             "-pp",  # 实时进度
             "-l", language
@@ -161,6 +238,7 @@ except ImportError:
                     if stop_event and stop_event.is_set():
                         return
                     stderr_data.append(line)
+                    debug_print(f"STDERR: {line.strip()}")
             
             stderr_thread = threading.Thread(target=read_stderr, daemon=True)
             stderr_thread.start()
@@ -173,6 +251,7 @@ except ImportError:
             )
             
             # 持续读取 stdout 以获取进度行
+            last_progress_time = time.time()
             while process.poll() is None:
                 if stop_event and stop_event.is_set():
                     debug_print("停止事件已触发。终止 Whisper.cpp 进程...")
@@ -195,6 +274,7 @@ except ImportError:
                 line = process.stdout.readline()
                 if line:
                     stdout_lines.append(line)
+                    debug_print(f"STDOUT: {line.strip()}")
                     # 尝试从时间戳解析进度
                     match_for_progress = re.search(
                         r'\[(\d{2}:\d{2}:\d{2}\.\d{3}) --> (\d{2}:\d{2}:\d{2}\.\d{3})\]',
@@ -206,9 +286,14 @@ except ImportError:
                             h, m, s_milli = start_str.split(':')
                             s, ms = s_milli.split('.')
                             current_time = (int(h) * 3600 + int(m) * 60 + int(s)) + (float(ms) / 1000.0)
-                            progress = int((current_time / 100.0) * 100)  # 假设音频长度为100秒
-                            if progress_callback:
-                                progress_callback(progress, f"转录中: {progress}% 完成")
+                            progress = min(int((current_time / 100.0) * 100), 95)  # 假设音频长度为100秒，最大进度为95%
+                            
+                            # 限制进度更新频率，避免过多的更新
+                            current_time = time.time()
+                            if current_time - last_progress_time >= 0.5:  # 每0.5秒最多更新一次
+                                if progress_callback:
+                                    progress_callback(progress, f"转录中: {progress}% 完成")
+                                last_progress_time = current_time
                         except Exception as e:
                             debug_print(f"解析进度时出错: {e}")
                 else:
@@ -217,9 +302,27 @@ except ImportError:
             # 处理剩余的 stdout
             for line in process.stdout:
                 stdout_lines.append(line)
+                debug_print(f"STDOUT: {line.strip()}")
             
             # 等待 stderr 完成
             stderr_thread.join(timeout=1.0)
+            
+            # 检查进程退出代码
+            exit_code = process.returncode
+            debug_print(f"Whisper.cpp 进程退出，退出代码: {exit_code}")
+            
+            if exit_code != 0:
+                stderr_text = ''.join(stderr_data)
+                debug_print(f"Whisper.cpp 进程失败: {stderr_text}")
+                if progress_callback:
+                    progress_callback(0, f"转录失败: 进程退出代码 {exit_code}")
+                return {
+                    'text': f"转录失败: 进程退出代码 {exit_code}\n{stderr_text}",
+                    'segments': [],
+                    'stderr': stderr_text,
+                    'cancelled': True,
+                    'temp_audio_path': temp_wav_path
+                }
         
         except Exception as e:
             debug_print(f"转录过程中出错: {e}")
@@ -233,7 +336,8 @@ except ImportError:
                 'text': f"转录过程中出错: {str(e)}",
                 'segments': [],
                 'stderr': ''.join(stderr_data),
-                'cancelled': True
+                'cancelled': True,
+                'temp_audio_path': temp_wav_path
             }
         
         finally:
@@ -253,7 +357,8 @@ except ImportError:
                 'text': "转录已被用户取消。",
                 'segments': [],
                 'stderr': ''.join(stderr_data),
-                'cancelled': True
+                'cancelled': True,
+                'temp_audio_path': temp_wav_path
             }
         
         # 解析最终文本
@@ -313,7 +418,8 @@ except ImportError:
             'text': output_text,  # 返回带时间戳的原始 Whisper 输出
             'segments': segments,
             'stderr': ''.join(stderr_data),
-            'cancelled': False
+            'cancelled': False,
+            'temp_audio_path': temp_wav_path
         }
 
 def allowed_file(filename):
@@ -361,7 +467,7 @@ def upload_file():
     
     if file and allowed_file(file.filename):
         filename = secure_filename(file.filename)
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file_path = os.path.join(os.path.abspath(app.config['UPLOAD_FOLDER']), filename)
         file.save(file_path)
         
         # 创建任务ID
@@ -369,10 +475,16 @@ def upload_file():
         session['current_task_id'] = task_id
         session['current_file_path'] = file_path
         
+        debug_print(f"文件已上传: {file_path}, 任务ID: {task_id}, 会话ID: {session.sid if hasattr(session, 'sid') else '未知'}")
+        
+        # 确保会话数据被保存
+        session.modified = True
+        
         return jsonify({
             'success': True,
             'filename': filename,
-            'task_id': task_id
+            'task_id': task_id,
+            'file_path': file_path
         })
     
     return jsonify({'error': '不支持的文件类型'}), 400
@@ -382,10 +494,49 @@ def start_transcription():
     """开始转录任务"""
     data = request.json
     task_id = data.get('task_id')
-    file_path = session.get('current_file_path')
+    file_path = data.get('file_path') or session.get('current_file_path')
     
-    if not task_id or not file_path:
-        return jsonify({'error': '无效的任务或文件'}), 400
+    debug_print(f"转录请求: task_id={task_id}, file_path={file_path}, session={session}")
+    
+    if not task_id:
+        return jsonify({'error': '无效的任务ID'}), 400
+    
+    if not file_path:
+        # 尝试从任务ID推断文件路径
+        for filename in os.listdir(app.config['UPLOAD_FOLDER']):
+            full_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            if os.path.isfile(full_path) and os.path.getmtime(full_path) > time.time() - 300:  # 5分钟内上传的文件
+                file_path = full_path
+                session['current_file_path'] = file_path
+                debug_print(f"从最近上传的文件推断文件路径: {file_path}")
+                break
+    
+    if not file_path:
+        return jsonify({'error': '无效的文件路径，请重新上传文件'}), 400
+    
+    # 检查文件是否存在
+    if not os.path.exists(file_path):
+        debug_print(f"文件不存在: {file_path}")
+        return jsonify({'error': f'文件不存在: {file_path}'}), 400
+    
+    # 获取Whisper可执行文件路径
+    whisper_path = data.get('whisper_path', get_default_whisper_cpp_path())
+    
+    # 确保使用绝对路径
+    if not os.path.isabs(whisper_path):
+        whisper_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), whisper_path)
+    
+    # 如果用户选择了目录，猜测实际的二进制文件名
+    if os.path.isdir(whisper_path):
+        if os.name == "nt":
+            whisper_path = os.path.join(whisper_path, "whisper-cli.exe")
+        else:
+            whisper_path = os.path.join(whisper_path, "whisper-cli")
+    
+    # 检查可执行文件是否存在
+    if not os.path.exists(whisper_path):
+        debug_print(f"Whisper可执行文件不存在: {whisper_path}")
+        return jsonify({'error': f'Whisper可执行文件不存在: {whisper_path}'}), 400
     
     # 转录选项
     options = {
@@ -396,17 +547,10 @@ def start_transcription():
         'start_time': data.get('start_time', '00:00:00'),
         'end_time': data.get('end_time', ''),
         'generate_srt': data.get('generate_srt', False),
-        'whisper_executable': data.get('whisper_path', get_default_whisper_cpp_path())
+        'whisper_executable': whisper_path
     }
     
-    # 如果用户选择了目录，猜测实际的二进制文件名
-    exe_path = options['whisper_executable']
-    if os.path.isdir(exe_path):
-        if os.name == "nt":
-            exe_path = os.path.join(exe_path, "whisper-cli.exe")
-        else:
-            exe_path = os.path.join(exe_path, "whisper-cli")
-        options['whisper_executable'] = exe_path
+    debug_print(f"使用Whisper可执行文件: {options['whisper_executable']}")
     
     # 创建进度队列
     progress_queue = queue.Queue()
@@ -441,16 +585,22 @@ def transcribe_task(task_id, file_path, options, progress_queue, stop_event):
     """执行转录任务的线程函数"""
     try:
         def progress_callback(progress, message):
+            debug_print(f"进度更新: {progress}%, 消息: {message}")
             progress_queue.put({
                 'progress': progress,
                 'message': message
             })
-            socketio.emit('progress_update', {
-                'task_id': task_id,
-                'progress': progress,
-                'message': message
-            })
+            # 确保进度更新发送到前端
+            try:
+                socketio.emit('progress_update', {
+                    'task_id': task_id,
+                    'progress': progress,
+                    'message': message
+                }, namespace='/')
+            except Exception as e:
+                debug_print(f"发送进度更新失败: {str(e)}")
         
+        debug_print(f"开始转录任务: {task_id}, 文件: {file_path}")
         result = transcribe_audio(
             file_path=file_path,
             options=options,
@@ -458,17 +608,27 @@ def transcribe_task(task_id, file_path, options, progress_queue, stop_event):
             stop_event=stop_event
         )
         
+        debug_print(f"转录任务完成: {task_id}, 状态: {'已取消' if stop_event.is_set() else '成功'}")
+        
         if stop_event.is_set():
             transcription_tasks[task_id]['status'] = 'cancelled'
-            socketio.emit('transcription_cancelled', {'task_id': task_id})
+            try:
+                socketio.emit('transcription_cancelled', {'task_id': task_id}, namespace='/')
+                debug_print(f"已发送取消通知: {task_id}")
+            except Exception as e:
+                debug_print(f"发送取消通知失败: {str(e)}")
         else:
             transcription_tasks[task_id]['result'] = result
             transcription_tasks[task_id]['status'] = 'completed'
-            socketio.emit('transcription_completed', {
-                'task_id': task_id,
-                'text': result.get('text', ''),
-                'has_segments': len(result.get('segments', [])) > 0
-            })
+            try:
+                socketio.emit('transcription_completed', {
+                    'task_id': task_id,
+                    'text': result.get('text', ''),
+                    'has_segments': len(result.get('segments', [])) > 0
+                }, namespace='/')
+                debug_print(f"已发送完成通知: {task_id}")
+            except Exception as e:
+                debug_print(f"发送完成通知失败: {str(e)}")
         
         # 清理临时文件
         if result.get('temp_audio_path') and os.path.exists(result['temp_audio_path']):
@@ -604,6 +764,327 @@ if __name__ == '__main__':
     # 加载配置
     config = load_config()
     debug_print(f"使用配置: {config}")
+    
+    # 确保必要的目录存在
+    os.makedirs("temp", exist_ok=True)
+    os.makedirs("models/whisper", exist_ok=True)
+    
+    # 检查模板目录是否存在
+    if not os.path.exists("templates"):
+        debug_print("创建模板目录...")
+        os.makedirs("templates", exist_ok=True)
+        
+        # 创建基本的index.html模板
+        with open("templates/index.html", "w", encoding="utf-8") as f:
+            f.write("""
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebWhisper - 音频/视频转录</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css">
+    <style>
+        body { padding-top: 20px; }
+        .hidden { display: none; }
+        .progress { height: 25px; }
+        #result-container { white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="text-center mb-4">WebWhisper 音频/视频转录</h1>
+        
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5>上传文件</h5>
+            </div>
+            <div class="card-body">
+                <form id="upload-form">
+                    <div class="mb-3">
+                        <label for="file" class="form-label">选择音频或视频文件</label>
+                        <input type="file" class="form-control" id="file" accept=".wav,.mp3,.m4a,.flac,.ogg,.wma,.mp4,.mov,.avi,.mkv">
+                    </div>
+                    <button type="submit" class="btn btn-primary">上传</button>
+                </form>
+            </div>
+        </div>
+        
+        <div id="transcription-options" class="card mb-4 hidden">
+            <div class="card-header">
+                <h5>转录选项</h5>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label for="model" class="form-label">选择模型</label>
+                    <select class="form-select" id="model">
+                        {% for model in models %}
+                        <option value="{{ model.split('.')[1] }}">{{ model }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label for="language" class="form-label">语言</label>
+                    <select class="form-select" id="language">
+                        <option value="auto">自动检测</option>
+                        <option value="zh">中文</option>
+                        <option value="en">英文</option>
+                        <option value="ja">日语</option>
+                        <option value="ko">韩语</option>
+                        <option value="fr">法语</option>
+                        <option value="de">德语</option>
+                        <option value="es">西班牙语</option>
+                        <option value="ru">俄语</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label for="task" class="form-label">任务</label>
+                    <select class="form-select" id="task">
+                        <option value="transcribe">转录</option>
+                        <option value="translate">翻译为英文</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label for="beam-size" class="form-label">Beam Size (1-8)</label>
+                    <input type="number" class="form-control" id="beam-size" min="1" max="8" value="{{ config.beam_size }}">
+                </div>
+                <button id="start-transcription" class="btn btn-success">开始转录</button>
+            </div>
+        </div>
+        
+        <div id="progress-container" class="card mb-4 hidden">
+            <div class="card-header">
+                <h5>转录进度</h5>
+            </div>
+            <div class="card-body">
+                <div class="progress mb-3">
+                    <div id="progress-bar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%"></div>
+                </div>
+                <p id="progress-message">准备中...</p>
+                <button id="cancel-transcription" class="btn btn-danger">取消</button>
+            </div>
+        </div>
+        
+        <div id="result-card" class="card mb-4 hidden">
+            <div class="card-header">
+                <h5>转录结果</h5>
+            </div>
+            <div class="card-body">
+                <div id="result-container" class="border p-3 mb-3 bg-light"></div>
+                <button id="download-srt" class="btn btn-primary">下载SRT字幕</button>
+                <button id="new-transcription" class="btn btn-secondary">新的转录</button>
+            </div>
+        </div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/socket.io@4.6.1/client-dist/socket.io.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // 全局变量
+            let currentTaskId = null;
+            let currentFilePath = null;
+            let socket = io();
+            
+            // 元素引用
+            const uploadForm = document.getElementById('upload-form');
+            const fileInput = document.getElementById('file');
+            const transcriptionOptions = document.getElementById('transcription-options');
+            const progressContainer = document.getElementById('progress-container');
+            const progressBar = document.getElementById('progress-bar');
+            const progressMessage = document.getElementById('progress-message');
+            const resultCard = document.getElementById('result-card');
+            const resultContainer = document.getElementById('result-container');
+            const startTranscriptionBtn = document.getElementById('start-transcription');
+            const cancelTranscriptionBtn = document.getElementById('cancel-transcription');
+            const downloadSrtBtn = document.getElementById('download-srt');
+            const newTranscriptionBtn = document.getElementById('new-transcription');
+            
+            // Socket.io 事件
+            socket.on('connect', function() {
+                console.log('已连接到服务器');
+            });
+            
+            socket.on('disconnect', function() {
+                console.log('与服务器断开连接');
+            });
+            
+            socket.on('progress_update', function(data) {
+                if (data.task_id === currentTaskId) {
+                    progressBar.style.width = data.progress + '%';
+                    progressMessage.textContent = data.message;
+                }
+            });
+            
+            socket.on('transcription_completed', function(data) {
+                if (data.task_id === currentTaskId) {
+                    progressContainer.classList.add('hidden');
+                    resultCard.classList.remove('hidden');
+                    resultContainer.textContent = data.text;
+                }
+            });
+            
+            socket.on('transcription_error', function(data) {
+                if (data.task_id === currentTaskId) {
+                    progressContainer.classList.add('hidden');
+                    alert('转录错误: ' + data.error);
+                }
+            });
+            
+            socket.on('transcription_cancelled', function(data) {
+                if (data.task_id === currentTaskId) {
+                    progressContainer.classList.add('hidden');
+                    alert('转录已取消');
+                }
+            });
+            
+            // 上传表单提交
+            uploadForm.addEventListener('submit', function(e) {
+                e.preventDefault();
+                
+                const file = fileInput.files[0];
+                if (!file) {
+                    alert('请选择文件');
+                    return;
+                }
+                
+                const formData = new FormData();
+                formData.append('file', file);
+                
+                fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        currentTaskId = data.task_id;
+                        currentFilePath = data.file_path;
+                        transcriptionOptions.classList.remove('hidden');
+                    } else {
+                        alert('上传失败: ' + data.error);
+                    }
+                })
+                .catch(error => {
+                    console.error('上传错误:', error);
+                    alert('上传错误: ' + error);
+                });
+            });
+            
+            // 开始转录
+            startTranscriptionBtn.addEventListener('click', function() {
+                if (!currentTaskId) {
+                    alert('请先上传文件');
+                    return;
+                }
+                
+                const model = document.getElementById('model').value;
+                const language = document.getElementById('language').value;
+                const task = document.getElementById('task').value;
+                const beamSize = document.getElementById('beam-size').value;
+                
+                transcriptionOptions.classList.add('hidden');
+                progressContainer.classList.remove('hidden');
+                progressBar.style.width = '0%';
+                progressMessage.textContent = '准备中...';
+                
+                fetch('/transcribe', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        task_id: currentTaskId,
+                        file_path: currentFilePath,
+                        model: model,
+                        language: language,
+                        task: task,
+                        beam_size: beamSize
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (!data.success) {
+                        progressContainer.classList.add('hidden');
+                        alert('转录请求失败: ' + data.error);
+                    }
+                })
+                .catch(error => {
+                    console.error('转录请求错误:', error);
+                    progressContainer.classList.add('hidden');
+                    alert('转录请求错误: ' + error);
+                });
+            });
+            
+            // 取消转录
+            cancelTranscriptionBtn.addEventListener('click', function() {
+                if (!currentTaskId) return;
+                
+                fetch('/cancel_transcription', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        task_id: currentTaskId
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (!data.success) {
+                        alert('取消失败: ' + data.error);
+                    }
+                })
+                .catch(error => {
+                    console.error('取消错误:', error);
+                    alert('取消错误: ' + error);
+                });
+            });
+            
+            // 下载SRT字幕
+            downloadSrtBtn.addEventListener('click', function() {
+                if (!currentTaskId) return;
+                
+                fetch('/download_srt', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        task_id: currentTaskId
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        window.location.href = '/download/' + data.filename;
+                    } else {
+                        alert('下载失败: ' + data.error);
+                    }
+                })
+                .catch(error => {
+                    console.error('下载错误:', error);
+                    alert('下载错误: ' + error);
+                });
+            });
+            
+            // 新的转录
+            newTranscriptionBtn.addEventListener('click', function() {
+                currentTaskId = null;
+                currentFilePath = null;
+                fileInput.value = '';
+                resultCard.classList.add('hidden');
+                uploadForm.classList.remove('hidden');
+            });
+        });
+    </script>
+</body>
+</html>
+            """)
+        
+        # 创建静态资源目录
+        os.makedirs("static/css", exist_ok=True)
+        os.makedirs("static/js", exist_ok=True)
     
     # 启动服务器
     socketio.run(app, host='0.0.0.0', port=5000, debug=True) 
